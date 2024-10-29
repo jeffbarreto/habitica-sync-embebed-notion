@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notion to Habitica Sync</title>
+</head>
+<body>
+  <h1>Notion to Habitica Sync</h1>
+
+  <!-- Formulário para capturar as variáveis de ambiente -->
+  <form id="envForm">
+    <label for="notionToken">Notion Token:</label>
+    <input type="text" id="notionToken" required><br><br>
+
+    <label for="notionDatabaseId">Notion Database ID:</label>
+    <input type="text" id="notionDatabaseId" required><br><br>
+
+    <label for="habiticaUser">Habitica API User:</label>
+    <input type="text" id="habiticaUser" required><br><br>
+
+    <label for="habiticaApiKey">Habitica API Key:</label>
+    <input type="text" id="habiticaApiKey" required><br><br>
+
+    <button type="button" onclick="saveEnvVars()">Save and Start Sync</button>
+  </form>
+
+  <h2>Console Output:</h2>
+  <pre id="output"></pre>
+
+  <script>
+    function saveEnvVars() {
+      localStorage.setItem('notionToken', document.getElementById('notionToken').value);
+      localStorage.setItem('notionDatabaseId', document.getElementById('notionDatabaseId').value);
+      localStorage.setItem('habiticaUser', document.getElementById('habiticaUser').value);
+      localStorage.setItem('habiticaApiKey', document.getElementById('habiticaApiKey').value);
+      logOutput('Environment variables saved.\n');
+      syncNotionToHabitica();
+    }
+
+    function loadEnvVars() {
+      document.getElementById('notionToken').value = localStorage.getItem('notionToken') || '';
+      document.getElementById('notionDatabaseId').value = localStorage.getItem('notionDatabaseId') || '';
+      document.getElementById('habiticaUser').value = localStorage.getItem('habiticaUser') || '';
+      document.getElementById('habiticaApiKey').value = localStorage.getItem('habiticaApiKey') || '';
+    }
+
+    function logOutput(message) {
+      document.getElementById('output').textContent += message + "\n";
+    }
+
+    function prefixChar() {
+      return 'N2H_';
+    }
+
+    function completed() {
+      return 'Completed';
+    }
+
+    function prefixN2H(taskName) {
+      return prefixChar() + taskName;
+    }
+
+    async function readDatabaseOfNotion() {
+      const notionToken = localStorage.getItem('notionToken');
+      const databaseId = localStorage.getItem('notionDatabaseId');
+
+      try {
+        const response = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${notionToken}`,
+            'Content-Type': 'application/json',
+            'Notion-Version': '2021-05-13',
+          }
+        });
+        logOutput(`Notion Response Status: ${response.status}`);
+        const data = await response.json();
+        return data.results.map(item => ({
+          name: item.properties.Name.title[0].text.content,
+          status: item.properties.Status.select.name,
+          id: item.id,
+        }));
+      } catch (error) {
+        logOutput(`Error fetching Notion data: ${error}`);
+      }
+    }
+
+    async function readHabiticaData(urlPath) {
+      const habiticaUser = localStorage.getItem('habiticaUser');
+      const habiticaApiKey = localStorage.getItem('habiticaApiKey');
+
+      try {
+        const response = await fetch(`https://habitica.com/api/v3/tasks/user${urlPath}`, {
+          method: 'GET',
+          headers: {
+            'x-api-user': habiticaUser,
+            'x-api-key': habiticaApiKey,
+          }
+        });
+        logOutput(`Habitica Response Status: ${response.status}`);
+        const data = await response.json();
+        return data.data.map(item => ({ name: item.text, id: item.id }));
+      } catch (error) {
+        logOutput(`Error fetching Habitica data: ${error}`);
+      }
+    }
+
+    async function createTodoInHabitica(name) {
+      const habiticaUser = localStorage.getItem('habiticaUser');
+      const habiticaApiKey = localStorage.getItem('habiticaApiKey');
+
+      try {
+        const response = await fetch("https://habitica.com/api/v3/tasks/user", {
+          method: 'POST',
+          headers: {
+            'x-api-user': habiticaUser,
+            'x-api-key': habiticaApiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            text: prefixN2H(name),
+            type: "todo",
+            priority: "2"
+          })
+        });
+        if (response.ok) {
+          logOutput(`Created Todo in Habitica: ${name}`);
+        } else {
+          logOutput(`Failed to create Todo in Habitica: ${response.status}`);
+        }
+      } catch (error) {
+        logOutput(`Error creating Todo in Habitica: ${error}`);
+      }
+    }
+
+    async function syncNotionToHabitica() {
+      logOutput('Syncing Notion to Habitica...');
+
+      const habiticaTodos = await readHabiticaData('?type=todos');
+      const notionTasks = await readDatabaseOfNotion();
+
+      for (const notionTask of notionTasks) {
+        const habiticaTask = habiticaTodos.find(task => task.name === prefixN2H(notionTask.name));
+
+        if (notionTask.status === completed() && habiticaTask) {
+          logOutput(`Completed task found in Habitica: ${notionTask.name}`);
+          await scoreTaskInHabitica(habiticaTask.id);
+        } else if (habiticaTask === undefined) {
+          logOutput(`Task missing in Habitica, creating: ${notionTask.name}`);
+          await createTodoInHabitica(notionTask.name);
+        }
+      }
+    }
+
+    async function scoreTaskInHabitica(id) {
+      const habiticaUser = localStorage.getItem('habiticaUser');
+      const habiticaApiKey = localStorage.getItem('habiticaApiKey');
+
+      try {
+        const response = await fetch(`https://habitica.com/api/v3/tasks/${id}/score/up`, {
+          method: 'POST',
+          headers: {
+            'x-api-user': habiticaUser,
+            'x-api-key': habiticaApiKey
+          }
+        });
+        if (response.ok) {
+          logOutput(`Scored task in Habitica: ${id}`);
+        } else {
+          logOutput(`Failed to score task in Habitica: ${response.status}`);
+        }
+      } catch (error) {
+        logOutput(`Error scoring task in Habitica: ${error}`);
+      }
+    }
+
+    window.onload = loadEnvVars;
+  </script>
+</body>
+</html>
