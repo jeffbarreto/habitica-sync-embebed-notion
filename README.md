@@ -1,1 +1,1 @@
-"# habitica-sync-embebed-notion" 
+habitica-sync-embebed-notion
